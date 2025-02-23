@@ -1,4 +1,4 @@
-package com.directa24.backendchallenge.MovieDirectorsAPI;
+package com.directa24.backendchallenge.moviedirectorsapi;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
