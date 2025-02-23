@@ -1,6 +1,8 @@
 package com.directa24.backendchallenge.moviedirectorsapi.client;
 
 import com.directa24.backendchallenge.moviedirectorsapi.model.MovieResponse;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -30,70 +32,123 @@ public class MovieClientTest {
     @Mock
     private MovieResponse movieResponse;
 
+    @Mock
+    private CircuitBreakerRegistry circuitBreakerRegistry;
+
+    private CircuitBreaker circuitBreaker;
+
     @BeforeEach
     void setUp() {
+        circuitBreaker = CircuitBreaker.ofDefaults("movieClient");
+        lenient().when(circuitBreakerRegistry.circuitBreaker("movieClient")).thenReturn(circuitBreaker);
         movieClient = new MovieClient(restTemplate);
     }
 
     @Test
     void getMovies_CorrectURL() {
-        // Arrange
         String expectedUrl = "https://challenge.iugolabs.com/api/movies/search?page={page}";
         Map<String, Integer> params = new HashMap<>();
         params.put("page", 1);
         when(restTemplate.getForObject(expectedUrl, MovieResponse.class, params))
                 .thenReturn(movieResponse);
 
-        // Act
         MovieResponse result = movieClient.getMovies(1);
 
-        // Assert
         assertNotNull(result);
         verify(restTemplate).getForObject(expectedUrl, MovieResponse.class, params);
     }
 
     @Test
     void getMovies_InvalidPage() {
-        // Arrange
         String expectedUrl = "https://challenge.iugolabs.com/api/movies/search?page={page}";
         Map<String, Integer> params = new HashMap<>();
         params.put("page", -1);
         when(restTemplate.getForObject(expectedUrl, MovieResponse.class, params))
                 .thenThrow(new HttpClientErrorException(HttpStatus.BAD_REQUEST));
 
-        // Act & Assert
         assertThrows(HttpClientErrorException.class, () -> movieClient.getMovies(-1));
         verify(restTemplate).getForObject(expectedUrl, MovieResponse.class, params);
     }
 
     @Test
     void getMovies_ResourceAccessException() {
-        // Arrange
         String expectedUrl = "https://challenge.iugolabs.com/api/movies/search?page={page}";
         Map<String, Integer> params = new HashMap<>();
         params.put("page", 1);
         when(restTemplate.getForObject(expectedUrl, MovieResponse.class, params))
                 .thenThrow(new ResourceAccessException("I/O error"));
 
-        // Act & Assert
         assertThrows(ResourceAccessException.class, () -> movieClient.getMovies(1));
         verify(restTemplate).getForObject(expectedUrl, MovieResponse.class, params);
     }
 
     @Test
     void getMovies_NullResponse() {
-        // Arrange
         String expectedUrl = "https://challenge.iugolabs.com/api/movies/search?page={page}";
         Map<String, Integer> params = new HashMap<>();
         params.put("page", 1);
         when(restTemplate.getForObject(expectedUrl, MovieResponse.class, params))
                 .thenReturn(null);
 
-        // Act
         MovieResponse result = movieClient.getMovies(1);
 
-        // Assert
         assertNull(result);
         verify(restTemplate).getForObject(expectedUrl, MovieResponse.class, params);
     }
+
+    @Test
+    void getMovies_CircuitBreakerClosed() {
+        String expectedUrl = "https://challenge.iugolabs.com/api/movies/search?page={page}";
+        Map<String, Integer> params = new HashMap<>();
+        params.put("page", 1);
+        when(restTemplate.getForObject(expectedUrl, MovieResponse.class, params))
+                .thenReturn(movieResponse);
+
+        MovieResponse result = movieClient.getMovies(1);
+
+        assertNotNull(result);
+        verify(restTemplate).getForObject(expectedUrl, MovieResponse.class, params);
+    }
+
+    @Test
+    void getMovies_CircuitBreakerOpen() {
+        circuitBreaker.transitionToOpenState();
+        int page = 1;
+
+        MovieResponse result = movieClient.fallbackGetMovies(page, new ResourceAccessException("I/O error"));
+
+        assertNotNull(result);
+        assertTrue(result.getData().isEmpty());
+        verify(restTemplate, never()).getForObject(anyString(), eq(MovieResponse.class), anyMap());
+    }
+
+    @Test
+    void getMovies_CircuitBreakerHalfOpen() {
+        circuitBreaker.transitionToOpenState();
+        circuitBreaker.transitionToHalfOpenState();
+        String expectedUrl = "https://challenge.iugolabs.com/api/movies/search?page={page}";
+        Map<String, Integer> params = new HashMap<>();
+        params.put("page", 1);
+        when(restTemplate.getForObject(expectedUrl, MovieResponse.class, params))
+                .thenReturn(movieResponse);
+
+        MovieResponse result = movieClient.getMovies(1);
+
+        assertNotNull(result);
+        verify(restTemplate).getForObject(expectedUrl, MovieResponse.class, params);
+    }
+
+    @Test
+    void getMovies_CircuitBreakerHalfOpen_Failure() {
+        CircuitBreaker circuitBreaker = circuitBreakerRegistry.circuitBreaker("movieClient");
+
+        circuitBreaker.transitionToOpenState();
+        circuitBreaker.transitionToHalfOpenState();
+
+        MovieResponse result = movieClient.fallbackGetMovies(1, new ResourceAccessException("I/O error"));
+
+        assertNotNull(result);
+        assertTrue(result.getData().isEmpty());
+    }
+
 }
